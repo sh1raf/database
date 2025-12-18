@@ -6,6 +6,7 @@
 #include <string>
 #include <fstream>
 #include <filesystem>
+#include <mutex>
 
 #include "../../Containers/hashtable.hpp"
 #include "document.hpp"
@@ -13,7 +14,16 @@
 
 using nlohmann::json;
 
-class Database {
+mutex mtx;
+
+enum operationState
+{
+    SUCCESS,
+    FAILED
+};
+
+class Database 
+{
 private:
     string dbName;
     string basePath;
@@ -43,10 +53,11 @@ public:
         ensureDirectoryExists();
     }
     
-    void insert(const string& collectionName, const string& documentJson) 
+    operationState insert(const string& collectionName, const string& documentJson) 
     {
         string cleanJson = removeQuotes(documentJson);
-        
+
+        mtx.lock();
         try 
         {
             json docData = json::parse(cleanJson);
@@ -60,45 +71,22 @@ public:
             saveCollection(collectionName, collection);
             
             cout << "Document inserted successfully." << endl;
+            mtx.unlock();
+            return operationState::SUCCESS;
         }
         catch (const exception& e) 
         {
             cerr << "Error inserting document: " << e.what() << endl;
+            mtx.unlock();
+            return operationState::FAILED;
         }
     }
     
-    myVector<Document> find(const string& collectionName, const string& queryJson) 
+    operationState remove(const string& collectionName, const string& queryJson) 
     {
         string cleanJson = removeQuotes(queryJson);
         
-        try 
-        {
-            json query = json::parse(cleanJson);
-            ChainHashTable<string, Document> collection;
-            loadCollection(collectionName, collection);
-            
-            myVector<Document> results;
-            auto allDocs = collection.getAll();
-            for (size_t i = 0; i < allDocs.size(); i++) 
-            {
-                if (allDocs[i].second.matches(query)) 
-                {
-                    results.push_back(allDocs[i].second);
-                }
-            }
-
-            return results;
-        }
-        catch (const exception& e) 
-        {
-            cerr << "Error finding documents: " << e.what() << endl;
-        }
-    }
-    
-    void remove(const string& collectionName, const string& queryJson) 
-    {
-        string cleanJson = removeQuotes(queryJson);
-        
+        mtx.lock();
         try 
         {
             json query = json::parse(cleanJson);
@@ -122,18 +110,50 @@ public:
             
             saveCollection(collectionName, collection);
             cout << "Removed " << idsToRemove.size() << " document(s)." << endl;
+            mtx.unlock();
+            return operationState::SUCCESS;
         }
         catch (const exception& e) 
         {
             cerr << "Error removing documents: " << e.what() << endl;
+            mtx.unlock();
+            return operationState::FAILED;
         }
     }
+    
+    myVector<Document> find(const string& collectionName, const string& queryJson) 
+    {
+        string cleanJson = removeQuotes(queryJson);
+
+        try 
+        {
+            json query = json::parse(cleanJson);
+            ChainHashTable<string, Document> collection;
+            loadCollection(collectionName, collection);
+            
+            myVector<Document> results;
+            auto allDocs = collection.getAll();
+            for (size_t i = 0; i < allDocs.size(); i++) 
+            {
+                if (allDocs[i].second.matches(query)) 
+                {
+                    results.push_back(allDocs[i].second);
+                }
+            }
+            return results;
+        }
+        catch (const exception& e) 
+        {
+            cerr << "Error finding documents: " << e.what() << endl;
+        }
+    }
+    
 
 private:
     void loadCollection(const string& collectionName, ChainHashTable<string, Document>& collection) 
     {
         string filePath = getCollectionPath(collectionName);
-        
+
         if (!filesystem::exists(filePath)) 
         {
             return;
